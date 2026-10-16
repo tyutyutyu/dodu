@@ -26,3 +26,11 @@ coverage.html
 # Temp
 tmp/
 *.tmp
+
+# >>> github-manager: gitignore-baseline
+.DS_Store
+.idea/
+.env
+.claude/
+!.claude/skills/
+# <<< github-manager: gitignore-baseline
