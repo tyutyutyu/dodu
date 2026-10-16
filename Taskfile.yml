@@ -46,7 +46,7 @@ tasks:
     desc: Run golangci-lint (auto-installs if missing).
     cmds:
       - task: lint-install
-      - GOTOOLCHAIN=go1.23.12 {{.GOLANGCI_LINT_BIN}} run ./...
+      - GOTOOLCHAIN=go1.24.13 {{.GOLANGCI_LINT_BIN}} run ./...
     vars:
       GOLANGCI_LINT_BIN: "{{.ROOT_DIR}}/.task/bin/golangci-lint"
 
