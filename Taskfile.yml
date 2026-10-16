@@ -4,7 +4,7 @@ vars:
   BIN_NAME: dodu
   BIN_DIR: bin
   PKG: github.com/tyutyutyu/dodu
-  GOLANGCI_LINT_VERSION: v2.1.6
+  GOLANGCI_LINT_VERSION: v2.14.0
   CHANGIE_VERSION: v1.26.0
   CHANGIE_BIN: '{{.ROOT_DIR}}/.task/bin/changie-{{.CHANGIE_VERSION}}'
   VERSION:
@@ -46,7 +46,7 @@ tasks:
     desc: Run golangci-lint (auto-installs if missing).
     cmds:
       - task: lint-install
-      - GOTOOLCHAIN=go1.24.13 {{.GOLANGCI_LINT_BIN}} run ./...
+      - GOTOOLCHAIN=go1.26.9 {{.GOLANGCI_LINT_BIN}} run ./...
     vars:
       GOLANGCI_LINT_BIN: "{{.ROOT_DIR}}/.task/bin/golangci-lint"
 
