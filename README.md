@@ -1,74 +1,93 @@
 # dodu
 
-> **Docker disk atlas** — an `ncdu`-style, fast, navigable TUI/CLI that shows
-> what consumes disk in your Docker environment (images, containers, volumes,
-> build cache, logs) and suggests safe, dry-run cleanup plans.
+Docker disk atlas: a terminal browser and CLI for images, containers, volumes,
+build cache, and readable local log files. Inspect storage, export snapshots,
+and preview cleanup before explicitly applying it.
 
-[![CI](https://github.com/tyutyutyu/dodu/actions/workflows/ci.yml/badge.svg)](https://github.com/tyutyutyu/dodu/actions/workflows/ci.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+## Download
 
-> Status: **early development** — phase 00 (bootstrap) complete. See
-> [PLAN.md](PLAN.md) and [.github/prompts/](.github/prompts/) for the roadmap.
+Get a prebuilt binary from [Releases](https://github.com/tyutyutyu/dodu/releases/latest)
+or the [nightly prerelease](https://github.com/tyutyutyu/dodu/releases/tag/nightly).
+Go is not needed to run it.
 
-## Why
+## Build and run
 
-`docker system df -v` tells you how much disk is used, but not **what** to
-clean or **how much** you'd actually reclaim. `dodu` answers:
+Requires Go 1.23 or newer to build and access to a Docker Engine to scan.
 
-- What is eating my disk? (images vs. volumes vs. build cache vs. logs)
-- Which images/volumes are *exclusive* vs. *shared*?
-- What can I safely prune, and how much would I get back?
-
-## Install
-
-```bash
-go install github.com/tyutyutyu/dodu/cmd/dodu@latest
+```sh
+git clone https://github.com/tyutyutyu/dodu.git
+cd dodu
+CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o bin/dodu ./cmd/dodu
+./bin/dodu scan
+./bin/dodu                      # interactive atlas
 ```
 
-Pre-built binaries (Linux, macOS — amd64 & arm64) and Homebrew/Scoop packages
-arrive with the `v0.1.0` release.
+The static Linux binary has no libc, package-manager, or init-system dependency.
+It can run on Alpine, Slackware, and other Linux distributions of the
+matching architecture. Docker reports storage sizes through its API; dodu does
+not read overlay2, Btrfs, ZFS, XFS, or other driver internals. The cache is optional
+and scanning continues if the cache filesystem cannot support it.
 
-## Quick start
+## Commands
 
-```bash
-dodu version    # show build info
-dodu            # launch TUI (placeholder until phase 06)
+```sh
+dodu scan --json                 # or --format text/csv-images/csv-volumes/...
+dodu export snapshot.json
+dodu export images.csv
+dodu prune                      # fresh scan and dry-run only
+dodu prune --kind container --apply --yes
+dodu --readonly                 # browsing and export; no cleanup
+dodu cache info
+dodu cache purge
+dodu version
 ```
+
+Use `--host unix:///path/to/docker.sock` or `DOCKER_HOST` for a nondefault endpoint.
+`--no-cache` bypasses the 60-second display cache. Cleanup always scans afresh.
+`DODU_READONLY=1` disables cleanup in both CLI and TUI.
+
+**TUI keys:** arrows or `j/k` move, Enter/`l` opens, Esc/`h` goes back,
+`g` switches type/project grouping, `s` sorts, Tab toggles details, `r` rescans,
+`d` marks one object, `p` previews cleanup, `x` refreshes the preview before
+requiring typed `yes`, `e` exports JSON to the current directory, `?` shows help,
+and `q` quits.
+
+## Measurement and cleanup limits
+
+- Sizes are Docker's logical accounting, not physical filesystem allocation.
+  Compression, snapshots, sparse files, reflinks, and plugin-managed storage can
+  make physical free-space changes differ from the estimate.
+- Shared image layers count once in the daemon image total. Build cache may
+  share storage with images; category totals are not independent disk partitions.
+- Remote, inaccessible, and non-file logs are unmeasured. The log subtotal includes
+  only readable local files, not rotated or externally managed logs.
+- Unknown volume sizes remain marked as estimates. Docker plugins may not expose
+  usage. An incomplete scan is displayed with errors and cannot authorize cleanup.
+- Cleanup does not force-remove objects. Active containers and their images,
+  and referenced volumes, are protected. Docker enforces concurrent-use checks.
+- Applied cleanup requires a writable audit path under
+  `$XDG_STATE_HOME/dodu/audit.log` or `~/.local/state/dodu/audit.log`.
+  Deletion failures return a nonzero exit status; reclaimed bytes are estimates
+  except where Docker returns a measured value.
+
+See [installation](docs/install.md), [quickstart](docs/quickstart.md), [releasing](docs/releasing.md), and
+[verification](docs/verification.md). [PLAN.md](PLAN.md) and phase prompts preserve
+the original roadmap; their original design and performance targets are not guarantees.
 
 ## Development
 
-Requires **Go 1.23+** and [Task](https://taskfile.dev).
-`golangci-lint` is auto-installed by `task lint`.
-
-```bash
-task verify     # lint + test + build (CI gate)
-task test       # unit tests
-task build      # ./bin/dodu
-task run        # build + run
+```sh
+go test -race ./...
+go vet ./...
+go mod tidy -diff
+# With Task installed:
+task verify
 ```
 
-### Project layout
-
-| Path | Purpose |
-|---|---|
-| `cmd/dodu/` | Binary entry point |
-| `internal/cli/` | Cobra command tree |
-| `internal/tui/` | Bubbletea TUI (phases 06–07) |
-| `pkg/docker/` | Docker SDK wrapper (phase 01) |
-| `pkg/scan/` | Snapshot collector (phase 02) |
-| `pkg/size/` | Layer accounting (phase 03) |
-| `pkg/group/` | Tree builders (phase 04) |
-| `pkg/cache/` | Persistent cache (phase 05) |
-| `pkg/plan/` | Cleanup planner (phase 08) |
-| `pkg/export/` | JSON/CSV export (phase 10) |
-| `test/integration/` | E2E tests (`-tags=integration`) |
-
-## Contributing
-
-1. Pick a phase from [`.github/prompts/`](.github/prompts/).
-2. Run `task verify` before committing.
-3. Use Conventional Commits (`feat:`, `fix:`, `chore:`, …).
+`task verify` uses the pinned v2 linter independently of any system v1 installation.
+Static analysis uses Go 1.23.12, supported by that linter. Runtime binaries do not
+require Go or Task. Release builds cover Linux/macOS on amd64 and arm64.
 
 ## License
 
-[MIT](LICENSE) © dodu contributors
+[MIT](LICENSE)

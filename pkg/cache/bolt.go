@@ -16,7 +16,7 @@ import (
 )
 
 // CurrentVersion is the on-disk format version. Bump on incompatible changes.
-const CurrentVersion = 1
+const CurrentVersion = 2
 
 var bucketSnapshots = []byte("snapshots")
 
@@ -42,15 +42,17 @@ type entry struct {
 // snapshotPayload mirrors scan.Snapshot but with []string for errors so gob
 // can roundtrip it.
 type snapshotPayload struct {
-	Daemon     docker.DaemonInfo
-	Images     []docker.Image
-	Containers []docker.Container
-	Volumes    []docker.Volume
-	BuildCache []docker.BuildCacheEntry
-	LogSizes   map[string]int64
-	CapturedAt time.Time
-	Duration   time.Duration
-	Errors     []string
+	LayersSize      int64
+	LayersSizeKnown bool
+	Daemon          docker.DaemonInfo
+	Images          []docker.Image
+	Containers      []docker.Container
+	Volumes         []docker.Volume
+	BuildCache      []docker.BuildCacheEntry
+	LogSizes        map[string]int64
+	CapturedAt      time.Time
+	Duration        time.Duration
+	Errors          []string
 }
 
 // DefaultPath returns the platform cache path: $XDG_CACHE_HOME/dodu/snapshots.db
@@ -111,14 +113,16 @@ func (c *BoltCache) Load(key string) (*scan.Snapshot, error) {
 	}
 
 	snap := &scan.Snapshot{
-		Daemon:     e.Snapshot.Daemon,
-		Images:     e.Snapshot.Images,
-		Containers: e.Snapshot.Containers,
-		Volumes:    e.Snapshot.Volumes,
-		BuildCache: e.Snapshot.BuildCache,
-		LogSizes:   e.Snapshot.LogSizes,
-		CapturedAt: e.Snapshot.CapturedAt,
-		Duration:   e.Snapshot.Duration,
+		LayersSize:      e.Snapshot.LayersSize,
+		LayersSizeKnown: e.Snapshot.LayersSizeKnown,
+		Daemon:          e.Snapshot.Daemon,
+		Images:          e.Snapshot.Images,
+		Containers:      e.Snapshot.Containers,
+		Volumes:         e.Snapshot.Volumes,
+		BuildCache:      e.Snapshot.BuildCache,
+		LogSizes:        e.Snapshot.LogSizes,
+		CapturedAt:      e.Snapshot.CapturedAt,
+		Duration:        e.Snapshot.Duration,
 	}
 	for _, s := range e.Snapshot.Errors {
 		snap.Errors = append(snap.Errors, errors.New(s))
@@ -132,14 +136,16 @@ func (c *BoltCache) Save(key string, snap *scan.Snapshot) error {
 		return errors.New("cache: cannot save nil snapshot")
 	}
 	payload := snapshotPayload{
-		Daemon:     snap.Daemon,
-		Images:     snap.Images,
-		Containers: snap.Containers,
-		Volumes:    snap.Volumes,
-		BuildCache: snap.BuildCache,
-		LogSizes:   snap.LogSizes,
-		CapturedAt: snap.CapturedAt,
-		Duration:   snap.Duration,
+		LayersSize:      snap.LayersSize,
+		LayersSizeKnown: snap.LayersSizeKnown,
+		Daemon:          snap.Daemon,
+		Images:          snap.Images,
+		Containers:      snap.Containers,
+		Volumes:         snap.Volumes,
+		BuildCache:      snap.BuildCache,
+		LogSizes:        snap.LogSizes,
+		CapturedAt:      snap.CapturedAt,
+		Duration:        snap.Duration,
 	}
 	for _, e := range snap.Errors {
 		payload.Errors = append(payload.Errors, e.Error())

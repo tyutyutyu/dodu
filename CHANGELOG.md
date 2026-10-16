@@ -5,7 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+New changes are collected in [`.changes/unreleased`](.changes/unreleased) until the next release.
+
+## [0.4.0](https://github.com/tyutyutyu/dodu/releases/tag/v0.4.0) - 2026-09-15
+
+### Added
+
+- Complete the interactive storage atlas with details, marking, export, cleanup preview, confirmation, cancellation, and read-only operation.
+- Publish versioned Linux and macOS archives for amd64 and arm64, SHA-256 checksums, and build provenance through a manually runnable tag-release workflow. Static Linux binaries run without Go or a libc dependency, including on Alpine and Slackware/Unraid systems.
+- Build a scheduled or manually triggered nightly prerelease through the shared release workflow. Refresh the nightly tag and assets with detailed changes, commit identity, and verification metadata.
+- Collect contributor-facing change fragments with Changie and prepare versioned release notes and VERSION together; retain the previous changelog history.
+
+### Changed
+
+- Gather Docker storage usage through one disk-usage request instead of storage-driver internals; preserve scanning when cache storage is unavailable or unwritable.
+
+### Fixed
+
+- Correct volume and shared-image accounting, duplicated log totals, and cache lock retention. Scope build-cache cleanup to selected records, protect active containers, and propagate audit and deletion failures.
+
+**Full changelog:** [Changes since the 0.3.0 source snapshot](https://github.com/tyutyutyu/dodu/compare/3b9167939fd0eba58dd68ebd40d722e8f05ea020...v0.4.0)
 
 ## [0.3.0] - 2026-05-01
 
@@ -47,6 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `github.com/charmbracelet/lipgloss`, `github.com/charmbracelet/bubbles`,
   `golang.org/x/term`.
 
+[0.3.0]: https://github.com/tyutyutyu/dodu/compare/v0.2.0...v0.3.0
+
 ## [0.2.0] - 2026-05-01
 
 ### Added
@@ -73,6 +94,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `pkg/docker/mock`: race in `bump`/`CallCount` writes when invoked from
   parallel goroutines (added mutex).
 
+[0.2.0]: https://github.com/tyutyutyu/dodu/compare/v0.1.0...v0.2.0
+
 ## [0.1.0] - 2026-05-01
 
 ### Added
@@ -93,6 +116,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pinned transitive deps (`grpc`, `genproto`, `otel*`, `x/sys`, `x/time`,
   `go-connections`) to versions compatible with Go 1.23 toolchain.
 
+[0.1.0]: https://github.com/tyutyutyu/dodu/compare/v0.0.1...v0.1.0
+
 ## [0.0.1] - 2026-04-30
 
 ### Added
@@ -105,8 +130,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `PLAN.md` with vision, KPIs, MVP scope, architecture, UX, and roadmap.
 - MIT license, `.gitignore`, `CHANGELOG.md`.
 
-[Unreleased]: https://github.com/tyutyutyu/dodu/compare/v0.3.0...HEAD
-[0.3.0]: https://github.com/tyutyutyu/dodu/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/tyutyutyu/dodu/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/tyutyutyu/dodu/compare/v0.0.1...v0.1.0
 [0.0.1]: https://github.com/tyutyutyu/dodu/releases/tag/v0.0.1

@@ -156,3 +156,61 @@ func TestParentSizeAggregates(t *testing.T) {
 		}
 	}
 }
+
+func TestGroupTotalsCountSharedLayersAndLogsOnce(t *testing.T) {
+	snap := &scan.Snapshot{
+		LayersSize: 150, LayersSizeKnown: true,
+		Images:     []docker.Image{{ID: "a", Size: 100, SharedSize: 50}, {ID: "b", Size: 100, SharedSize: 50}},
+		Containers: []docker.Container{{ID: "c", ImageID: "a", SizeRw: 10}},
+		LogSizes:   map[string]int64{"c": 20},
+	}
+	for name, build := range map[string]func(*scan.Snapshot) *group.Node{"type": group.ByType, "project": group.ByProject} {
+		t.Run(name, func(t *testing.T) {
+			root := build(snap)
+			if root.Size.Total != 180 {
+				t.Fatalf("total = %d, want 180", root.Size.Total)
+			}
+			var sum int64
+			for _, child := range root.Children {
+				sum += child.Size.Total
+			}
+			if sum != root.Size.Total {
+				t.Fatalf("children = %d, root = %d", sum, root.Size.Total)
+			}
+		})
+	}
+	root := group.ByType(snap)
+	for _, n := range root.Children {
+		if n.Name == "Images" && n.Size.Total != 150 {
+			t.Errorf("image total = %d", n.Size.Total)
+		}
+		if n.Name == "Containers" && n.Size.Total != 10 {
+			t.Errorf("container total = %d", n.Size.Total)
+		}
+	}
+}
+
+func TestUnknownLayerAggregateUsesExclusiveEstimate(t *testing.T) {
+	snap := &scan.Snapshot{Images: []docker.Image{{ID: "a", Size: 100, SharedSize: 50}, {ID: "b", Size: 100, SharedSize: 50}}}
+	for _, root := range []*group.Node{group.ByType(snap), group.ByProject(snap)} {
+		if root.Size.Total != 100 || !root.Size.Estimated {
+			t.Errorf("unknown aggregate = %+v", root.Size)
+		}
+	}
+}
+
+func TestVolumeBacklinksDeduplicateRepeatedMounts(t *testing.T) {
+	snap := &scan.Snapshot{
+		Containers: []docker.Container{{ID: "c", Mounts: []docker.ContainerMount{{Type: "volume", Name: "v", Destination: "/one"}, {Type: "volume", Name: "v", Destination: "/two"}}}},
+		Volumes:    []docker.Volume{{Name: "v", UsageBytes: 10}},
+	}
+	root := group.ByType(snap)
+	root.Walk(func(n *group.Node) {
+		if n.Kind == group.KindVolume && len(n.Refs.ContainerIDs) != 1 {
+			t.Errorf("volume backlinks = %v", n.Refs.ContainerIDs)
+		}
+		if n.Kind == group.KindContainer && len(n.Refs.VolumeNames) != 1 {
+			t.Errorf("container backlinks = %v", n.Refs.VolumeNames)
+		}
+	})
+}

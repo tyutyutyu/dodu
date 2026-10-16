@@ -1,6 +1,7 @@
 package group
 
 import (
+	"slices"
 	"strings"
 
 	"github.com/tyutyutyu/dodu/pkg/scan"
@@ -40,7 +41,9 @@ func ByType(snap *scan.Snapshot) *Node {
 	for _, c := range snap.Containers {
 		for _, m := range c.Mounts {
 			if m.Type == "volume" && m.Name != "" {
-				containersByVolume[m.Name] = append(containersByVolume[m.Name], c.ID)
+				if !slices.Contains(containersByVolume[m.Name], c.ID) {
+					containersByVolume[m.Name] = append(containersByVolume[m.Name], c.ID)
+				}
 			}
 		}
 	}
@@ -64,13 +67,15 @@ func ByType(snap *scan.Snapshot) *Node {
 		volNames := []string{}
 		for _, m := range c.Mounts {
 			if m.Type == "volume" && m.Name != "" {
-				volNames = append(volNames, m.Name)
+				if !slices.Contains(volNames, m.Name) {
+					volNames = append(volNames, m.Name)
+				}
 			}
 		}
 		containersNode.Children = append(containersNode.Children, &Node{
 			Name: containerDisplayName(c.Names, c.ID),
 			Kind: KindContainer,
-			Size: size.ImageSize{Total: writable + log, Exclusive: writable + log},
+			Size: size.ImageSize{Total: writable, Exclusive: writable},
 			Refs: Refs{ImageID: c.ImageID, VolumeNames: volNames},
 			Meta: map[string]string{
 				"id":     c.ID,
@@ -122,9 +127,20 @@ func ByType(snap *scan.Snapshot) *Node {
 
 	for _, b := range []*Node{imagesNode, containersNode, volumesNode, buildCacheNode, logsNode} {
 		sumChildren(b)
+		if b == imagesNode {
+			if snap.LayersSizeKnown && snap.LayersSize >= 0 {
+				b.Size.Total = snap.LayersSize
+				b.Size.Shared = max(int64(0), snap.LayersSize-b.Size.Exclusive)
+			} else if len(snap.Images) > 0 {
+				b.Size.Estimated = true
+			}
+		}
 		root.Children = append(root.Children, b)
 	}
 	sumChildren(root)
+	if !snap.LayersSizeKnown && len(snap.Images) > 0 {
+		root.Size.Estimated = true
+	}
 	return root
 }
 
@@ -254,14 +270,30 @@ func ByProject(snap *scan.Snapshot) *Node {
 			Name: buildCacheDisplayName(b.Description, b.ID),
 			Kind: KindBuildCache,
 			Size: size.ImageSize{Total: b.Size, Exclusive: b.Size},
+			Meta: map[string]string{"id": b.ID},
 		})
 	}
 
+	// Shared layers cannot be assigned to a single Compose project. Keep
+	// their daemon-wide contribution separate rather than charging every image.
+	var exclusiveImages int64
+	for _, image := range imgSizes {
+		exclusiveImages += image.Exclusive
+	}
+	if snap.LayersSizeKnown && snap.LayersSize > exclusiveImages {
+		root.Children = append(root.Children, &Node{
+			Name: "<shared image layers>", Kind: KindProject,
+			Size: size.ImageSize{Total: snap.LayersSize - exclusiveImages, Shared: snap.LayersSize - exclusiveImages},
+		})
+	}
 	for _, p := range projects {
 		sumChildren(p)
 		root.Children = append(root.Children, p)
 	}
 	sumChildren(root)
+	if !snap.LayersSizeKnown && len(snap.Images) > 0 {
+		root.Size.Estimated = true
+	}
 	return root
 }
 

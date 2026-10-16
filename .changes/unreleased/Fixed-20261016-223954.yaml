@@ -1,0 +1,3 @@
+kind: Fixed
+body: Block hidden TUI cleanup during loading and scan failures, preserve build-cache marks across layouts, and retain unmeasured plugin and NFS volumes in scans and exports.
+time: 2026-10-16T22:39:54.383775715+02:00

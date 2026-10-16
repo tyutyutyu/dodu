@@ -8,8 +8,8 @@ import (
 // Totals aggregates disk usage across all object kinds.
 //
 // Reclaimable is a conservative estimate: it counts containers in
-// non-running states, dangling images (no RepoTags), volumes with RefCount==0,
-// and build cache entries that are not InUse.
+// stopped states, dangling images (no RepoTags), volumes with RefCount==0,
+// and build cache entries that are neither in use nor shared.
 type Totals struct {
 	Images      int64
 	Containers  int64
@@ -38,6 +38,10 @@ func ComputeTotals(snap *scan.Snapshot) Totals {
 		}
 	}
 
+	if snap.LayersSizeKnown && snap.LayersSize >= 0 {
+		totalImages = snap.LayersSize
+	}
+
 	var totalContainers, totalLogs, reclaimContainers int64
 	for _, c := range snap.Containers {
 		writable := c.SizeRw
@@ -47,7 +51,7 @@ func ComputeTotals(snap *scan.Snapshot) Totals {
 		log := snap.LogSize(c.ID)
 		totalContainers += writable
 		totalLogs += log
-		if !isRunning(c.State) {
+		if isStopped(c.State) {
 			reclaimContainers += writable + log
 		}
 	}
@@ -66,7 +70,7 @@ func ComputeTotals(snap *scan.Snapshot) Totals {
 	var totalBC, reclaimBC int64
 	for _, b := range snap.BuildCache {
 		totalBC += b.Size
-		if !b.InUse {
+		if !b.InUse && !b.Shared {
 			reclaimBC += b.Size
 		}
 	}
@@ -81,8 +85,8 @@ func ComputeTotals(snap *scan.Snapshot) Totals {
 	}
 }
 
-func isRunning(state string) bool {
-	return state == "running"
+func isStopped(state string) bool {
+	return state == "created" || state == "exited" || state == "dead"
 }
 
 func isDanglingImage(im docker.Image) bool {

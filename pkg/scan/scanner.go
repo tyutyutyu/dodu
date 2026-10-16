@@ -71,64 +71,76 @@ func (s *Scanner) Scan(ctx context.Context) (*Snapshot, error) {
 
 	g, gctx := errgroup.WithContext(ctx)
 
-	g.Go(func() error {
-		t := time.Now()
-		images, err := s.client.ListImages(gctx)
-		if err != nil {
-			addErr("images", err)
-			return nil
-		}
-		mu.Lock()
-		snap.Images = images
-		mu.Unlock()
-		s.logger.Debug("scan: images", "count", len(images), "took", time.Since(t))
-		return nil
-	})
-
 	containersDone := make(chan struct{})
-	g.Go(func() error {
-		defer close(containersDone)
-		t := time.Now()
-		containers, err := s.client.ListContainers(gctx, true)
-		if err != nil {
-			addErr("containers", err)
-			return nil
+	usage, usageErr := s.client.DiskUsage(ctx)
+	if usageErr == nil {
+		snap.Images, snap.Containers = usage.Images, usage.Containers
+		snap.Volumes, snap.BuildCache = usage.Volumes, usage.BuildCache
+		snap.LayersSize, snap.LayersSizeKnown = usage.LayersSize, usage.LayersSize >= 0
+		close(containersDone)
+	} else {
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
-		mu.Lock()
-		snap.Containers = containers
-		mu.Unlock()
-		s.logger.Debug("scan: containers", "count", len(containers), "took", time.Since(t))
-		return nil
-	})
-
-	g.Go(func() error {
-		t := time.Now()
-		volumes, err := s.client.ListVolumes(gctx)
-		if err != nil {
-			addErr("volumes", err)
+		addErr("disk_usage", usageErr)
+		g.Go(func() error {
+			t := time.Now()
+			images, err := s.client.ListImages(gctx)
+			if err != nil {
+				addErr("images", err)
+				return nil
+			}
+			mu.Lock()
+			snap.Images = images
+			mu.Unlock()
+			s.logger.Debug("scan: images", "count", len(images), "took", time.Since(t))
 			return nil
-		}
-		mu.Lock()
-		snap.Volumes = volumes
-		mu.Unlock()
-		s.logger.Debug("scan: volumes", "count", len(volumes), "took", time.Since(t))
-		return nil
-	})
+		})
 
-	g.Go(func() error {
-		t := time.Now()
-		bc, err := s.client.BuildCacheUsage(gctx)
-		if err != nil {
-			addErr("build_cache", err)
+		g.Go(func() error {
+			defer close(containersDone)
+			t := time.Now()
+			containers, err := s.client.ListContainers(gctx, true)
+			if err != nil {
+				addErr("containers", err)
+				return nil
+			}
+			mu.Lock()
+			snap.Containers = containers
+			mu.Unlock()
+			s.logger.Debug("scan: containers", "count", len(containers), "took", time.Since(t))
 			return nil
-		}
-		mu.Lock()
-		snap.BuildCache = bc
-		mu.Unlock()
-		s.logger.Debug("scan: build_cache", "count", len(bc), "took", time.Since(t))
-		return nil
-	})
+		})
 
+		g.Go(func() error {
+			t := time.Now()
+			volumes, err := s.client.ListVolumes(gctx)
+			if err != nil {
+				addErr("volumes", err)
+				return nil
+			}
+			mu.Lock()
+			snap.Volumes = volumes
+			mu.Unlock()
+			s.logger.Debug("scan: volumes", "count", len(volumes), "took", time.Since(t))
+			return nil
+		})
+
+		g.Go(func() error {
+			t := time.Now()
+			bc, err := s.client.BuildCacheUsage(gctx)
+			if err != nil {
+				addErr("build_cache", err)
+				return nil
+			}
+			mu.Lock()
+			snap.BuildCache = bc
+			mu.Unlock()
+			s.logger.Debug("scan: build_cache", "count", len(bc), "took", time.Since(t))
+			return nil
+		})
+
+	}
 	// Log sizes depend on the container list — run after that goroutine.
 	g.Go(func() error {
 		select {
@@ -148,6 +160,9 @@ func (s *Scanner) Scan(ctx context.Context) (*Snapshot, error) {
 	})
 
 	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	snap.Duration = time.Since(start)
@@ -172,16 +187,16 @@ func (s *Scanner) collectLogSizes(ctx context.Context, ids []string, snap *Snaps
 	}
 	sem := make(chan struct{}, conc)
 	var wg sync.WaitGroup
+	defer wg.Wait()
 	var mu sync.Mutex
 
 	for _, id := range ids {
 		select {
 		case <-ctx.Done():
 			return
-		default:
+		case sem <- struct{}{}:
 		}
 		wg.Add(1)
-		sem <- struct{}{}
 		go func(id string) {
 			defer wg.Done()
 			defer func() { <-sem }()
@@ -204,5 +219,4 @@ func (s *Scanner) collectLogSizes(ctx context.Context, ids []string, snap *Snaps
 			}
 		}(id)
 	}
-	wg.Wait()
 }

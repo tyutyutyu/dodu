@@ -27,6 +27,21 @@ func newPruneCmd(root *rootFlags) *cobra.Command {
 		Long: "Build a guarded prune plan from the current snapshot. Default is dry-run.\n" +
 			"Pass --apply --yes to execute non-interactively (CI mode).",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			for _, kind := range kinds {
+				switch kind {
+				case "image", "container", "volume", "build_cache":
+				default:
+					return fmt.Errorf("unknown kind %q", kind)
+				}
+			}
+			if apply {
+				if err := abortIfReadOnly(root); err != nil {
+					return err
+				}
+				if !yes {
+					return fmt.Errorf("--apply requires --yes")
+				}
+			}
 			ctx := cmd.Context()
 			if ctx == nil {
 				ctx = context.Background()
@@ -37,9 +52,14 @@ func newPruneCmd(root *rootFlags) *cobra.Command {
 			}
 			defer func() { _ = client.Close() }()
 
-			snap, err := loadOrScan(ctx, client, root)
+			fresh := *root
+			fresh.noCache = true
+			snap, err := loadOrScan(ctx, client, &fresh)
 			if err != nil {
 				return err
+			}
+			if len(snap.Errors) > 0 {
+				return fmt.Errorf("cannot plan cleanup from an incomplete scan: %v", snap.Errors)
 			}
 			marks := defaultMarks(snap, kinds)
 			pl := plan.Build(snap, marks)
@@ -58,7 +78,10 @@ func newPruneCmd(root *rootFlags) *cobra.Command {
 				}
 				return fmt.Errorf("--apply requires --yes when stdin is not a TTY")
 			}
-			audit, _ := plan.DefaultAuditLogPath()
+			audit, err := plan.DefaultAuditLogPath()
+			if err != nil {
+				return fmt.Errorf("resolve audit path: %w", err)
+			}
 			rep, err := pl.Execute(ctx, client, plan.ExecOptions{AuditLog: audit})
 			if err != nil {
 				return err
@@ -91,7 +114,7 @@ func defaultMarks(snap *scan.Snapshot, kinds []string) []plan.Mark {
 	}
 	if want["container"] {
 		for _, c := range snap.Containers {
-			if c.State != "running" {
+			if c.State == "exited" || c.State == "created" || c.State == "dead" {
 				marks = append(marks, plan.Mark{Kind: group.KindContainer, ID: c.ID})
 			}
 		}

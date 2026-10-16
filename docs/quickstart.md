@@ -33,7 +33,12 @@ Keys at a glance:
 | `g`            | Toggle layout (by-type ↔ by-project)     |
 | `s`            | Cycle sort (size → name → count)         |
 | `r`            | Re-scan                                  |
-| `?`            | Toggle help overlay                      |
+| `Tab`          | Toggle details                           |
+| `d`            | Mark an individual object                 |
+| `p`            | Preview a guarded cleanup plan            |
+| `x`            | Refresh preview, then require typed yes    |
+| `e`            | Export JSON to a new file                  |
+| `?`            | Toggle help overlay                       |
 | `q`            | Quit                                     |
 
 ## 4. Plan a clean-up (dry run by default)
@@ -73,5 +78,9 @@ dodu cache info
 dodu cache purge
 ```
 
-The cache stores recent snapshots keyed by daemon ID + version so the TUI
-opens instantly when nothing changed.
+The cache stores display snapshots for up to 60 seconds, keyed by daemon ID and
+version. Use `--no-cache` or TUI `r` to refresh. Prune always scans fresh.
+Cache failure falls back to scanning; applied cleanup requires a writable audit
+log. Sizes follow Docker logical accounting, not filesystem physical allocation.
+Log totals include only readable local files; remote/inaccessible logs are
+unmeasured. See [verification](verification.md) for tested environments.

@@ -2,9 +2,9 @@ version: 2
 
 project_name: dodu
 
-before:
-  hooks:
-    - go mod tidy
+git:
+  ignore_tags:
+    - nightly
 
 builds:
   - id: dodu
@@ -29,32 +29,23 @@ builds:
 archives:
   - id: dodu
     name_template: >-
-      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+      {{ .ProjectName }}_{{ if .IsSnapshot }}nightly{{ else }}{{ .Version }}{{ end }}_{{ .Os }}_{{ .Arch }}
     formats: [tar.gz]
-    format_overrides:
-      - goos: windows
-        formats: [zip]
     files:
       - LICENSE
       - README.md
       - CHANGELOG.md
+      - docs/install.md
 
 checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
 snapshot:
-  version_template: "{{ incpatch .Version }}-next"
+  version_template: '{{ if index .Env "DODU_BUILD_VERSION" }}{{ index .Env "DODU_BUILD_VERSION" }}{{ else }}{{ incpatch .Version }}-dev.{{ .ShortCommit }}{{ end }}'
 
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
-      - "Merge pull request"
+  disable: true
 
 release:
   github:

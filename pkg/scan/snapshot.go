@@ -12,6 +12,10 @@ import (
 // export. Field types come from pkg/docker so consumers never need to import
 // the SDK.
 type Snapshot struct {
+	// LayersSize is the daemon aggregate image-layer usage, including shared layers once.
+	LayersSize      int64
+	LayersSizeKnown bool
+
 	Daemon     docker.DaemonInfo
 	Images     []docker.Image
 	Containers []docker.Container

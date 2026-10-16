@@ -27,6 +27,14 @@ coverage.html
 tmp/
 *.tmp
 
+# Local verification tools
+.task/bin/
+
+# Generated release metadata
+/release-metadata.json
+/release-notes.md
+__pycache__/
+
 # >>> github-manager: gitignore-baseline
 .DS_Store
 .idea/

@@ -5,10 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"path/filepath"
-	"sync"
+	"slices"
 	"time"
 
 	"github.com/tyutyutyu/dodu/pkg/docker"
@@ -40,62 +39,81 @@ type ExecOptions struct {
 	ReadOnly bool
 	// AuditLog is opened in append mode for JSON-Lines records. Empty disables.
 	AuditLog string
-	// Force passes force=true to remove calls. The TUI/CLI must guard this.
+	// Force is rejected: a guarded plan must never kill active containers.
 	Force bool
 }
 
 // Execute carries out the Plan via the docker.Client. Blocked items are never
 // touched. All actions are appended to the audit log when configured.
-func (p *Plan) Execute(ctx context.Context, client docker.Client, opts ExecOptions) (Report, error) {
+func (p *Plan) Execute(ctx context.Context, client docker.Client, opts ExecOptions) (rep Report, retErr error) {
 	if p == nil {
 		return Report{}, errors.New("plan: nil")
 	}
 	if opts.ReadOnly || os.Getenv("DODU_READONLY") == "1" {
 		return Report{}, ErrReadOnly
 	}
-	rep := Report{StartedAt: time.Now()}
+	if opts.Force {
+		return Report{}, errors.New("plan: forced removal is incompatible with guarded execution")
+	}
+	rep = Report{StartedAt: time.Now()}
+	defer func() { rep.FinishedAt = time.Now() }()
 
-	var (
-		audit io.WriteCloser
-		amu   sync.Mutex
-	)
+	var audit *os.File
 	if opts.AuditLog != "" {
-		if err := os.MkdirAll(filepath.Dir(opts.AuditLog), 0o750); err == nil {
-			f, err := os.OpenFile(opts.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
-			if err == nil {
-				audit = f
-				defer func() { _ = f.Close() }()
-			}
+		if err := os.MkdirAll(filepath.Dir(opts.AuditLog), 0o750); err != nil {
+			return rep, fmt.Errorf("create audit directory: %w", err)
 		}
+		f, err := os.OpenFile(opts.AuditLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
+		if err != nil {
+			return rep, fmt.Errorf("open audit log: %w", err)
+		}
+		audit = f
+		defer func() { retErr = errors.Join(retErr, f.Close()) }()
 	}
-	writeAudit := func(rec map[string]any) {
+	writeAudit := func(rec map[string]any) error {
 		if audit == nil {
-			return
+			return nil
 		}
-		amu.Lock()
-		defer amu.Unlock()
-		_ = json.NewEncoder(audit).Encode(rec)
+		if err := json.NewEncoder(audit).Encode(rec); err != nil {
+			return err
+		}
+		return audit.Sync()
 	}
+	var failures []error
 
 	for _, it := range p.Items {
 		select {
 		case <-ctx.Done():
-			return rep, ctx.Err()
+			return rep, errors.Join(append(failures, ctx.Err())...)
 		default:
+		}
+		// Persist intent before touching Docker so audit failures stop safely.
+		if err := writeAudit(map[string]any{
+			"ts":       time.Now().UTC().Format(time.RFC3339Nano),
+			"phase":    "intent",
+			"kind":     string(it.Kind),
+			"id":       it.ID,
+			"name":     it.Name,
+			"estimate": it.EstReclaim,
+		}); err != nil {
+			return rep, errors.Join(append(failures, fmt.Errorf("write audit intent: %w", err))...)
 		}
 		res := ItemResult{Item: it}
 		var err error
 		switch it.Kind {
 		case group.KindImage:
-			_, err = client.RemoveImage(ctx, it.ID, opts.Force, true)
+			_, err = client.RemoveImage(ctx, it.ID, opts.Force, false)
 		case group.KindContainer:
 			err = client.RemoveContainer(ctx, it.ID, opts.Force, false)
 		case group.KindVolume:
 			err = client.RemoveVolume(ctx, it.ID, opts.Force)
 		case group.KindBuildCache:
-			// No per-ID API in the daemon; use prune as fallback for this kind.
-			report, perr := client.PruneBuildCache(ctx, docker.PruneFilters{})
+			// Limit prune to the selected entry; never prune unrelated cache.
+			report, perr := client.PruneBuildCache(ctx, docker.PruneFilters{IDs: []string{it.ID}})
 			err = perr
+			if err == nil && !slices.Contains(report.Deleted, it.ID) {
+				err = fmt.Errorf("daemon did not report selected build cache %s as deleted", it.ID)
+			}
 			if err == nil {
 				res.Reclaim = report.SpaceReclaimed
 			}
@@ -104,28 +122,31 @@ func (p *Plan) Execute(ctx context.Context, client docker.Client, opts ExecOptio
 		}
 		if err != nil {
 			res.Err = err.Error()
+			failures = append(failures, fmt.Errorf("remove %s %s: %w", it.Kind, it.ID, err))
 		} else {
 			res.Success = true
-			if res.Reclaim == 0 {
+			if res.Reclaim == 0 && it.Kind != group.KindBuildCache {
 				res.Reclaim = it.EstReclaim
 			}
 			rep.ActualReclaim += res.Reclaim
 		}
 		rep.Results = append(rep.Results, res)
-		writeAudit(map[string]any{
+		if err := writeAudit(map[string]any{
 			"ts":       time.Now().UTC().Format(time.RFC3339Nano),
 			"kind":     string(it.Kind),
 			"id":       it.ID,
 			"name":     it.Name,
+			"phase":    "result",
 			"success":  res.Success,
 			"err":      res.Err,
 			"reclaim":  res.Reclaim,
 			"estimate": it.EstReclaim,
-		})
+		}); err != nil {
+			return rep, errors.Join(append(failures, fmt.Errorf("write audit log: %w", err))...)
+		}
 	}
 
-	rep.FinishedAt = time.Now()
-	return rep, nil
+	return rep, errors.Join(failures...)
 }
 
 // DefaultAuditLogPath returns $XDG_STATE_HOME/dodu/audit.log or

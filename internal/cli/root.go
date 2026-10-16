@@ -5,7 +5,9 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os/signal"
+	"strings"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -38,6 +40,16 @@ func newRootCmd(info BuildInfo) *cobra.Command {
 		Long: "dodu is a fast, navigable TUI/CLI that shows what consumes disk in your\n" +
 			"Docker environment (images, containers, volumes, build cache, logs) and\n" +
 			"suggests safe, dry-run cleanup plans.",
+		Version: info.Version,
+		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			levels := map[string]slog.Level{"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError}
+			level, ok := levels[strings.ToLower(flags.logLevel)]
+			if !ok {
+				return fmt.Errorf("unknown log level %q", flags.logLevel)
+			}
+			slog.SetDefault(slog.New(slog.NewTextHandler(cmd.ErrOrStderr(), &slog.HandlerOptions{Level: level})))
+			return nil
+		},
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
