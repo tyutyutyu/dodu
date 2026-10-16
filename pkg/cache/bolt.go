@@ -10,6 +10,7 @@ import (
 	"time"
 
 	bolt "go.etcd.io/bbolt"
+	bolterrors "go.etcd.io/bbolt/errors"
 
 	"github.com/tyutyutyu/dodu/pkg/docker"
 	"github.com/tyutyutyu/dodu/pkg/scan"
@@ -163,7 +164,7 @@ func (c *BoltCache) Save(key string, snap *scan.Snapshot) error {
 // Purge removes all cached entries.
 func (c *BoltCache) Purge() error {
 	return c.db.Update(func(tx *bolt.Tx) error {
-		if err := tx.DeleteBucket(bucketSnapshots); err != nil && !errors.Is(err, bolt.ErrBucketNotFound) {
+		if err := tx.DeleteBucket(bucketSnapshots); err != nil && !errors.Is(err, bolterrors.ErrBucketNotFound) {
 			return err
 		}
 		_, err := tx.CreateBucket(bucketSnapshots)
