@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 New changes are collected in [`.changes/unreleased`](.changes/unreleased) until the next release.
 
+## [0.4.1](https://github.com/tyutyutyu/dodu/releases/tag/v0.4.1) - 2026-10-16
+
+### Fixed
+
+- Block hidden TUI cleanup during loading and scan failures, preserve build-cache marks across layouts, and retain unmeasured plugin and NFS volumes in scans and exports.
+
+**Full changelog:** [v0.4.0...v0.4.1](https://github.com/tyutyutyu/dodu/compare/v0.4.0...v0.4.1)
+
 ## [0.4.0](https://github.com/tyutyutyu/dodu/releases/tag/v0.4.0) - 2026-09-15
 
 ### Added
