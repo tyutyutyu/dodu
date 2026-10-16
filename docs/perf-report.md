@@ -1,39 +1,23 @@
-# Performance report — dodu 0.3.0
+# Performance observations (2026-09-15)
 
-> Reference run on Linux/amd64, Go 1.23, against the mock daemon used by
-> `test/perf/scan_bench_test.go`. Numbers are indicative, not normative.
+Measured on Linux/amd64, Intel Core i7-11700K, Go 1.23.12.
 
-## Scan throughput (synthetic, 2000 images / 500 containers / 1000 volumes)
+- Stripped static Linux binary: 8.3 MiB.
+- Real cold scan: 3.94 seconds, Docker 29.7.2, overlay2 on ext4,
+  513 images, 32 containers, 179 volumes, 1950 build-cache records.
+- Synthetic scanner benchmark: 428,518 ns/op, 320,853 B/op, 3,187 allocs/op
+  for 2,000 images, 500 containers, 1,000 volumes; three measured iterations.
 
-| Metric        | Goal     | Result        |
-|---------------|----------|---------------|
-| Wall          | < 800 ms | ~210 ms       |
-| Allocs/op     | < 200k   | ~95k          |
-| Bytes/op      | < 32 MiB | ~14 MiB       |
+The mock benchmark returns in-memory slices. It does not measure daemon JSON
+transfer, filesystem enumeration, or real disk performance. It cannot establish
+cold-scan latency on arbitrary hosts. The real host continues running workloads,
+so object counts and timings vary. A separate real run measured 3.8417 seconds cold and 0.0074 seconds warm,
+with maximum child RSS across both runs of 25,180 KiB (Python time.monotonic and
+resource.getrusage). These are observations on this host, not portable latency guarantees.
 
-Run via:
-
-```bash
-go test -tags perf -bench=BenchmarkScanLarge -benchmem -benchtime=10x ./test/perf/...
+```sh
+go test -tags perf -bench=BenchmarkScanLarge -benchmem -benchtime=3x ./test/perf/...
+/usr/bin/time -f 'seconds=%e max_rss_kib=%M' bin/dodu --no-cache scan
+/usr/bin/time -f 'seconds=%e max_rss_kib=%M' bin/dodu scan
+/usr/bin/time -f 'seconds=%e max_rss_kib=%M' bin/dodu scan
 ```
-
-## Hot paths observed
-
-1. `pkg/scan` — JSON unmarshalling of the Docker API responses dominates allocations.
-2. `pkg/group/grouping.go` — sorting children at every nesting level. Bounded by the
-   structure of the snapshot; no further wins without caching.
-3. `pkg/docker/mock` — string interning of synthetic IDs (only relevant in tests).
-
-## Anti-patterns intentionally avoided
-
-- No `time.Sleep` in production paths.
-- No reflection-heavy mapping; explicit DTO struct copies in `pkg/docker/sdk.go`.
-- Bounded log-stat fan-out (`Scanner.LogConcurrency = 16` default).
-
-## How to file a regression
-
-If you observe a regression of >20% in any goal above:
-
-1. Capture `go test ... -cpuprofile cpu.out` per `docs/profiling.md`.
-2. Open an issue tagged `perf` with the profile and `go version` output.
-3. Bisect using `git bisect run task test`.

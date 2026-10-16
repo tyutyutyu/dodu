@@ -1,6 +1,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request:
@@ -18,10 +19,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Go
-        uses: actions/setup-go@v5.6.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: '1.23.12'
           cache: true
@@ -33,4 +34,43 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Run task verify
-        run: task verify
+        run: |
+          task verify
+          task release:check
+          python3 -m unittest discover -s scripts/tests -v
+
+      - name: Isolated Alpine and vfs integration
+        if: runner.os == 'Linux'
+        run: sh test/integration/smoke.sh
+
+      - name: Slackware static binary smoke
+        if: runner.os == 'Linux'
+        run: docker run --rm --network none -v "$PWD/bin/dodu:/usr/local/bin/dodu:ro" vbatts/slackware:15.0 dodu version
+
+  package:
+    name: Package all release targets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.23.12'
+      - name: Prepare preview metadata
+        run: python3 scripts/release.py prepare nightly
+      - uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.1
+          args: release --snapshot --clean --skip=publish
+      - name: Verify archive checksums
+        run: python3 scripts/release.py verify-assets
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dodu-preview-${{ github.sha }}
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/build-info.json
+          if-no-files-found: error
+          retention-days: 7

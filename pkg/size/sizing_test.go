@@ -130,3 +130,31 @@ func TestFormat(t *testing.T) {
 		}
 	}
 }
+
+func TestTotalsExcludeActiveContainerReclaim(t *testing.T) {
+	for _, state := range []string{"running", "paused", "restarting", "removing", "unknown", ""} {
+		t.Run(state, func(t *testing.T) {
+			s := &scan.Snapshot{Containers: []docker.Container{{ID: "c", State: state, SizeRw: 100}}, LogSizes: map[string]int64{"c": 20}}
+			if got := size.ComputeTotals(s).Reclaimable; got != 0 {
+				t.Fatalf("active container counted reclaimable: %d", got)
+			}
+		})
+	}
+}
+
+func TestImageTotalIncludesSharedLayersOnce(t *testing.T) {
+	s := &scan.Snapshot{LayersSize: 150, LayersSizeKnown: true, Images: []docker.Image{
+		{ID: "a", Size: 100, SharedSize: 50}, {ID: "b", Size: 100, SharedSize: 50},
+	}}
+	if got := size.ComputeTotals(s).Images; got != 150 {
+		t.Fatalf("image total = %d, want unique daemon layers 150", got)
+	}
+}
+
+func TestSharedBuildCacheIsNotReclaimable(t *testing.T) {
+	s := &scan.Snapshot{BuildCache: []docker.BuildCacheEntry{{ID: "shared", Size: 10, Shared: true}, {ID: "exclusive", Size: 45}, {ID: "busy", Size: 20, InUse: true}}}
+	got := size.ComputeTotals(s)
+	if got.BuildCache != 75 || got.Reclaimable != 45 {
+		t.Fatalf("build cache accounting: %+v", got)
+	}
+}

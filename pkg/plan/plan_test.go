@@ -2,9 +2,12 @@ package plan_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/tyutyutyu/dodu/pkg/docker"
@@ -127,13 +130,175 @@ func TestExecuteRecordsFailure(t *testing.T) {
 	}
 	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "x", EstReclaim: 99}}}
 	rep, err := p.Execute(context.Background(), m, plan.ExecOptions{})
-	if err != nil {
-		t.Fatalf("unexpected: %v", err)
+	if err == nil {
+		t.Fatal("expected execution failure")
 	}
 	if len(rep.Results) != 1 || rep.Results[0].Success {
 		t.Errorf("expected one failed result, got %+v", rep.Results)
 	}
 	if rep.ActualReclaim != 0 {
 		t.Errorf("reclaim must be 0 on failure, got %d", rep.ActualReclaim)
+	}
+}
+
+func TestBuildBlocksActiveContainerStates(t *testing.T) {
+	for _, state := range []string{"paused", "restarting", "removing", "unknown"} {
+		t.Run(state, func(t *testing.T) {
+			s := snap()
+			s.Containers[0].State = state
+			p := plan.Build(s, []plan.Mark{{Kind: group.KindContainer, ID: "c-run"}, {Kind: group.KindImage, ID: "img-running"}})
+			if len(p.Items) != 0 || len(p.Blocked) != 2 {
+				t.Fatalf("unsafe plan: %+v", p)
+			}
+		})
+	}
+}
+
+func TestBuildDeduplicatesMarks(t *testing.T) {
+	mark := plan.Mark{Kind: group.KindImage, ID: "img-free"}
+	p := plan.Build(snap(), []plan.Mark{mark, mark})
+	if len(p.Items) != 1 || p.EstReclaim != 500 {
+		t.Fatalf("duplicate plan: %+v", p)
+	}
+}
+
+func TestExecuteScopesBuildCache(t *testing.T) {
+	m := mock.New()
+	m.PruneBuildCacheFunc = func(_ context.Context, f docker.PruneFilters) (docker.PruneReport, error) {
+		if len(f.IDs) != 1 || f.IDs[0] != "selected" {
+			t.Fatalf("unscoped cache prune: %+v", f)
+		}
+		return docker.PruneReport{Deleted: []string{"selected"}}, nil
+	}
+	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindBuildCache, ID: "selected", EstReclaim: 500}}}
+	rep, err := p.Execute(context.Background(), m, plan.ExecOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.ActualReclaim != 0 {
+		t.Fatalf("zero measured reclaim replaced by estimate: %+v", rep)
+	}
+}
+
+func TestExecuteRequiresWritableAudit(t *testing.T) {
+	m := mock.New()
+	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "x"}}}
+	_, err := p.Execute(context.Background(), m, plan.ExecOptions{AuditLog: t.TempDir()})
+	if err == nil {
+		t.Fatal("expected audit open failure")
+	}
+	if m.CallCount["RemoveImage"] != 0 {
+		t.Fatal("deleted before opening audit log")
+	}
+}
+
+func TestBuildRemovesContainersBeforeImages(t *testing.T) {
+	p := plan.Build(snap(), []plan.Mark{{Kind: group.KindImage, ID: "img-free"}, {Kind: group.KindContainer, ID: "c-stop"}})
+	if len(p.Items) != 2 || p.Items[0].Kind != group.KindContainer {
+		t.Fatalf("dependency order: %+v", p.Items)
+	}
+}
+
+func TestExecuteDoesNotPruneUnselectedImages(t *testing.T) {
+	m := mock.New()
+	m.RemoveImageFunc = func(_ context.Context, _ string, _ bool, pruneChildren bool) (int64, error) {
+		if pruneChildren {
+			t.Fatal("must not prune unselected image parents")
+		}
+		return 0, nil
+	}
+	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "selected"}}}
+	if _, err := p.Execute(context.Background(), m, plan.ExecOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestExecuteRejectsForce(t *testing.T) {
+	m := mock.New()
+	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindContainer, ID: "x"}}}
+	if _, err := p.Execute(context.Background(), m, plan.ExecOptions{Force: true}); err == nil {
+		t.Fatal("expected unsafe force rejected")
+	}
+	if m.CallCount["RemoveContainer"] != 0 {
+		t.Fatal("forced container delete called")
+	}
+}
+
+func TestExecuteAuditsIntentBeforeMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "audit.log")
+	m := mock.New()
+	m.RemoveImageFunc = func(_ context.Context, _ string, _, _ bool) (int64, error) {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var record map[string]any
+		if err := json.Unmarshal(data, &record); err != nil {
+			t.Fatalf("intent missing before deletion: %q: %v", data, err)
+		}
+		if record["phase"] != "intent" || record["id"] != "selected" {
+			t.Fatalf("unexpected intent: %+v", record)
+		}
+		return 0, nil
+	}
+	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "selected"}}}
+	if _, err := p.Execute(context.Background(), m, plan.ExecOptions{AuditLog: path}); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("want intent and outcome, got %q", data)
+	}
+	var outcome map[string]any
+	if err := json.Unmarshal([]byte(lines[1]), &outcome); err != nil {
+		t.Fatal(err)
+	}
+	if outcome["phase"] != "result" || outcome["success"] != true {
+		t.Fatalf("unexpected outcome: %+v", outcome)
+	}
+}
+
+func TestExecuteAuditFailurePreventsMutation(t *testing.T) {
+	for _, path := range []string{"/dev/full", "/dev/null"} {
+		t.Run(path, func(t *testing.T) {
+			if runtime.GOOS != "linux" {
+				t.Skip("Linux device write/sync failure fixtures")
+			}
+			if _, err := os.Stat(path); err != nil {
+				t.Skip(err)
+			}
+			m := mock.New()
+			p := &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "selected"}}}
+			if _, err := p.Execute(context.Background(), m, plan.ExecOptions{AuditLog: path}); err == nil {
+				t.Fatal("expected write/sync failure")
+			}
+			if m.CallCount["RemoveImage"] != 0 {
+				t.Fatal("deleted without durable audit intent")
+			}
+		})
+	}
+}
+
+func TestExecuteCacheMustReportSelectedDeletion(t *testing.T) {
+	m := mock.New()
+	m.PruneBuildCacheFunc = func(_ context.Context, _ docker.PruneFilters) (docker.PruneReport, error) {
+		return docker.PruneReport{Deleted: []string{"different"}, SpaceReclaimed: 100}, nil
+	}
+	p := &plan.Plan{Items: []plan.Item{{Kind: group.KindBuildCache, ID: "selected", EstReclaim: 500}}}
+	rep, err := p.Execute(context.Background(), m, plan.ExecOptions{})
+	if err == nil || len(rep.Results) != 1 || rep.Results[0].Success || rep.ActualReclaim != 0 {
+		t.Fatalf("claimed unverified deletion: %+v, %v", rep, err)
+	}
+}
+
+func TestBuildSharedCacheHasNoEstimatedReclaim(t *testing.T) {
+	s := &scan.Snapshot{BuildCache: []docker.BuildCacheEntry{{ID: "shared", Size: 10, Shared: true}, {ID: "exclusive", Size: 45}}}
+	p := plan.Build(s, []plan.Mark{{Kind: group.KindBuildCache, ID: "shared"}, {Kind: group.KindBuildCache, ID: "exclusive"}})
+	if len(p.Items) != 2 || p.Items[0].EstReclaim != 0 || p.EstReclaim != 45 {
+		t.Fatalf("shared bytes counted reclaimable: %+v", p)
 	}
 }

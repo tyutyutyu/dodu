@@ -23,6 +23,10 @@ func newExportCmd(info BuildInfo, root *rootFlags) *cobra.Command {
 				ctx = context.Background()
 			}
 			path := args[0]
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext != ".json" && ext != ".csv" {
+				return fmt.Errorf("unsupported extension %q (use .json or .csv)", ext)
+			}
 			client, err := newClient(root)
 			if err != nil {
 				return err
@@ -40,7 +44,6 @@ func newExportCmd(info BuildInfo, root *rootFlags) *cobra.Command {
 			}
 			defer func() { _ = f.Close() }()
 
-			ext := strings.ToLower(filepath.Ext(path))
 			switch ext {
 			case ".json":
 				return export.ToJSON(f, snap, export.ToolInfo{Name: "dodu", Version: info.Version})

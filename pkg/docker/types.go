@@ -103,7 +103,7 @@ type PruneReport struct {
 
 // PruneFilters narrows what can be pruned. Empty means "default".
 type PruneFilters struct {
-	IDs      []string // if set, only these IDs are pruned
+	IDs      []string // build cache IDs only; other prune methods reject this filter
 	Labels   map[string]string
 	Until    time.Duration // for build cache / images
 	Dangling *bool         // for images

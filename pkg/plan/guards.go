@@ -2,6 +2,7 @@ package plan
 
 import (
 	"fmt"
+	"sort"
 
 	"github.com/tyutyutyu/dodu/pkg/docker"
 	"github.com/tyutyutyu/dodu/pkg/group"
@@ -10,7 +11,7 @@ import (
 )
 
 // Build evaluates marks against the snapshot and returns a safe Plan:
-// running containers and the images/volumes they depend on are blocked;
+// active containers and the images/volumes they depend on are blocked;
 // in-use volumes are blocked; tagged image relations are warned.
 func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 	p := &Plan{}
@@ -31,7 +32,7 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 		volByName[v.Name] = v
 	}
 
-	// Image -> running containers using it
+	// Image -> active or unknown-state containers using it
 	runningByImage := map[string][]string{}
 	// Volume -> running containers using it
 	runningByVolume := map[string][]string{}
@@ -41,19 +42,24 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 		for _, m := range c.Mounts {
 			if m.Type == "volume" && m.Name != "" {
 				usedVolumes[m.Name] = true
-				if c.State == "running" {
+				if !stopped(c.State) {
 					runningByVolume[m.Name] = append(runningByVolume[m.Name], c.ID)
 				}
 			}
 		}
-		if c.State == "running" && c.ImageID != "" {
+		if !stopped(c.State) && c.ImageID != "" {
 			runningByImage[c.ImageID] = append(runningByImage[c.ImageID], c.ID)
 		}
 	}
 
 	imgSizes := size.ImageSizes(snap.Images)
 
+	seen := make(map[Mark]bool)
 	for _, mk := range marks {
+		if seen[mk] {
+			continue
+		}
+		seen[mk] = true
 		switch mk.Kind {
 		case group.KindImage:
 			im, ok := imgByID[mk.ID]
@@ -67,7 +73,7 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 					Kind: mk.Kind, ID: mk.ID,
 					Name:       displayImage(im),
 					EstReclaim: est,
-					Reason:     fmt.Sprintf("image is used by running container(s): %v", short(running...)),
+					Reason:     fmt.Sprintf("image is used by active or unknown-state container(s): %v", short(running...)),
 				})
 				continue
 			}
@@ -92,12 +98,12 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 				writable = 0
 			}
 			est := writable + snap.LogSize(c.ID)
-			if c.State == "running" {
+			if !stopped(c.State) {
 				p.Blocked = append(p.Blocked, Item{
 					Kind: mk.Kind, ID: mk.ID,
 					Name:       displayContainer(c),
 					EstReclaim: est,
-					Reason:     "container is running; stop it first",
+					Reason:     "container is active or its state is unknown; stop it first",
 				})
 				continue
 			}
@@ -146,11 +152,15 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 				p.Warnings = append(p.Warnings, fmt.Sprintf("build cache %s not found", short(mk.ID)))
 				continue
 			}
+			est := entry.Size
+			if entry.Shared {
+				est = 0
+			}
 			if entry.InUse {
 				p.Blocked = append(p.Blocked, Item{
 					Kind: mk.Kind, ID: mk.ID,
 					Name:       displayBC(*entry),
-					EstReclaim: entry.Size,
+					EstReclaim: est,
 					Reason:     "build cache entry is in use",
 				})
 				continue
@@ -158,7 +168,7 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 			p.Items = append(p.Items, Item{
 				Kind: mk.Kind, ID: mk.ID,
 				Name:       displayBC(*entry),
-				EstReclaim: entry.Size,
+				EstReclaim: est,
 				Reason:     "unused build cache",
 			})
 
@@ -167,6 +177,10 @@ func Build(snap *scan.Snapshot, marks []Mark) *Plan {
 		}
 	}
 
+	// Remove selected stopped containers before their images.
+	sort.SliceStable(p.Items, func(i, j int) bool {
+		return p.Items[i].Kind == group.KindContainer && p.Items[j].Kind != group.KindContainer
+	})
 	for _, it := range p.Items {
 		p.EstReclaim += it.EstReclaim
 	}
@@ -218,4 +232,9 @@ func displayBC(b docker.BuildCacheEntry) string {
 		return b.Description
 	}
 	return short(b.ID)
+}
+
+// Only terminal or never-started containers are safe deletion candidates.
+func stopped(state string) bool {
+	return state == "exited" || state == "created" || state == "dead"
 }

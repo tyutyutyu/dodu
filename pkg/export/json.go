@@ -29,14 +29,16 @@ type ToolInfo struct {
 
 // SnapshotJSON is the JSON projection of scan.Snapshot.
 type SnapshotJSON struct {
-	CapturedAt time.Time                `json:"captured_at"`
-	DurationMS int64                    `json:"duration_ms"`
-	Images     []docker.Image           `json:"images"`
-	Containers []docker.Container       `json:"containers"`
-	Volumes    []docker.Volume          `json:"volumes"`
-	BuildCache []docker.BuildCacheEntry `json:"build_cache"`
-	LogSizes   map[string]int64         `json:"log_sizes"`
-	Errors     []string                 `json:"errors,omitempty"`
+	LayersSize      int64                    `json:"layers_size"`
+	LayersSizeKnown bool                     `json:"layers_size_known"`
+	CapturedAt      time.Time                `json:"captured_at"`
+	DurationMS      int64                    `json:"duration_ms"`
+	Images          []docker.Image           `json:"images"`
+	Containers      []docker.Container       `json:"containers"`
+	Volumes         []docker.Volume          `json:"volumes"`
+	BuildCache      []docker.BuildCacheEntry `json:"build_cache"`
+	LogSizes        map[string]int64         `json:"log_sizes"`
+	Errors          []string                 `json:"errors,omitempty"`
 }
 
 // ToJSON writes a Document to w.
@@ -50,13 +52,15 @@ func ToJSON(w io.Writer, snap *scan.Snapshot, tool ToolInfo) error {
 		Tool:          tool,
 		Daemon:        snap.Daemon,
 		Snapshot: SnapshotJSON{
-			CapturedAt: snap.CapturedAt.UTC(),
-			DurationMS: snap.Duration.Milliseconds(),
-			Images:     snap.Images,
-			Containers: snap.Containers,
-			Volumes:    snap.Volumes,
-			BuildCache: snap.BuildCache,
-			LogSizes:   snap.LogSizes,
+			LayersSize:      snap.LayersSize,
+			LayersSizeKnown: snap.LayersSizeKnown,
+			CapturedAt:      snap.CapturedAt.UTC(),
+			DurationMS:      snap.Duration.Milliseconds(),
+			Images:          snap.Images,
+			Containers:      snap.Containers,
+			Volumes:         snap.Volumes,
+			BuildCache:      snap.BuildCache,
+			LogSizes:        snap.LogSizes,
 		},
 		Totals: size.ComputeTotals(snap),
 	}

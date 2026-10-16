@@ -5,6 +5,8 @@ vars:
   BIN_DIR: bin
   PKG: github.com/tyutyutyu/dodu
   GOLANGCI_LINT_VERSION: v2.1.6
+  CHANGIE_VERSION: v1.26.0
+  CHANGIE_BIN: '{{.ROOT_DIR}}/.task/bin/changie-{{.CHANGIE_VERSION}}'
   VERSION:
     sh: cat VERSION 2>/dev/null || echo "0.0.0"
   COMMIT:
@@ -44,22 +46,18 @@ tasks:
     desc: Run golangci-lint (auto-installs if missing).
     cmds:
       - task: lint-install
-      - "{{.GOLANGCI_LINT_BIN}} run ./..."
+      - GOTOOLCHAIN=go1.23.12 {{.GOLANGCI_LINT_BIN}} run ./...
     vars:
-      GOLANGCI_LINT_BIN:
-        sh: command -v golangci-lint 2>/dev/null || echo "$(go env GOPATH)/bin/golangci-lint"
+      GOLANGCI_LINT_BIN: "{{.ROOT_DIR}}/.task/bin/golangci-lint"
 
   lint-install:
     desc: Install golangci-lint if not present.
     cmds:
-      - |
-        if ! command -v golangci-lint >/dev/null 2>&1 && [ ! -x "$(go env GOPATH)/bin/golangci-lint" ]; then
-          echo ">> Installing golangci-lint {{.GOLANGCI_LINT_VERSION}}"
-          curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-            | sh -s -- -b "$(go env GOPATH)/bin" {{.GOLANGCI_LINT_VERSION}}
-        fi
+      - mkdir -p .task/bin
+      - GOBIN="{{.ROOT_DIR}}/.task/bin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{.GOLANGCI_LINT_VERSION}}
     status:
-      - command -v golangci-lint >/dev/null 2>&1 || test -x "$(go env GOPATH)/bin/golangci-lint"
+      - test -x .task/bin/golangci-lint
+
 
   test:
     desc: Run unit tests with race detector.
@@ -76,11 +74,12 @@ tasks:
     desc: Build the dodu binary into ./bin.
     cmds:
       - mkdir -p {{.BIN_DIR}}
-      - go build -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BIN_NAME}} ./cmd/dodu
+      - CGO_ENABLED=0 go build -trimpath -ldflags="{{.LDFLAGS}}" -o {{.BIN_DIR}}/{{.BIN_NAME}} ./cmd/dodu
     sources:
       - "**/*.go"
       - go.mod
       - go.sum
+      - VERSION
     generates:
       - "{{.BIN_DIR}}/{{.BIN_NAME}}"
 
@@ -95,25 +94,65 @@ tasks:
     cmds:
       - rm -rf {{.BIN_DIR}} coverage.out dist
 
-  version-bump:
-    desc: 'Bump VERSION file. Usage: task version-bump -- patch|minor|major'
+  changie-install:
+    desc: Install the pinned release-note tool locally (development only).
     cmds:
+      - mkdir -p .task/bin
+      - GOTOOLCHAIN=auto GOBIN="{{.ROOT_DIR}}/.task/bin" go install -ldflags="-X main.version={{trimPrefix "v" .CHANGIE_VERSION}}" github.com/miniscruff/changie@{{.CHANGIE_VERSION}}
+      - mv "{{.ROOT_DIR}}/.task/bin/changie" "{{.CHANGIE_BIN}}"
+    status:
+      - test -x "{{.CHANGIE_BIN}}"
+      - test "$("{{.CHANGIE_BIN}}" --version)" = "changie version {{.CHANGIE_VERSION}}"
+
+  change:
+    aliases: [change:new]
+    desc: 'Add a release-note fragment. Usage: task change [-- --kind Fixed --body "..."]'
+    cmds:
+      - task: changie-install
+      - '"{{.CHANGIE_BIN}}" new {{.CLI_ARGS}}'
+
+  release:prepare:
+    aliases: [version-bump]
+    desc: 'Batch change fragments and update CHANGELOG/VERSION. Usage: task release:prepare -- patch|minor|major'
+    env:
+      RELEASE_BUMP: '{{.CLI_ARGS}}'
+      CHANGIE: '{{.CHANGIE_BIN}}'
+    cmds:
+      - task: changie-install
+      - task: release:check
       - |
         set -eu
-        kind="{{.CLI_ARGS}}"
-        case "$kind" in
+        case "$RELEASE_BUMP" in
           patch|minor|major) ;;
-          *) echo "usage: task version-bump -- patch|minor|major" >&2; exit 2;;
+          *) echo "usage: task release:prepare -- patch|minor|major" >&2; exit 2;;
         esac
-        cur=$(cat VERSION 2>/dev/null || echo "0.0.0")
-        IFS=. read -r MAJ MIN PAT <<EOF
-        $cur
-        EOF
-        case "$kind" in
-          major) MAJ=$((MAJ+1)); MIN=0; PAT=0 ;;
-          minor) MIN=$((MIN+1)); PAT=0 ;;
-          patch) PAT=$((PAT+1)) ;;
-        esac
-        new="$MAJ.$MIN.$PAT"
-        echo "$new" > VERSION
-        echo "Bumped: $cur -> $new"
+        next=$("$CHANGIE" next "$RELEASE_BUMP")
+        "$CHANGIE" batch "$next" --allow-no-changes=false --move-dir "releases/$next"
+        "$CHANGIE" merge
+        echo "Prepared $next. Review and commit CHANGELOG.md, VERSION, and .changes/ before tagging."
+      - task: release:check
+
+  release:check:
+    desc: Check version/changelog consistency and validate pending change fragments.
+    env:
+      CHANGIE: '{{.CHANGIE_BIN}}'
+    cmds:
+      - task: changie-install
+      - |
+        set -eu
+        latest=$("$CHANGIE" latest --remove-prefix)
+        if [ "$(cat VERSION)" != "$latest" ]; then
+          echo "VERSION must match Changie's latest version ($latest); run changie merge after batching." >&2
+          exit 1
+        fi
+        generated=$(mktemp)
+        trap 'rm -f "$generated"' EXIT
+        "$CHANGIE" merge --dry-run > "$generated"
+        if ! cmp -s CHANGELOG.md "$generated"; then
+          echo "CHANGELOG.md is stale; run changie merge." >&2
+          diff -u CHANGELOG.md "$generated" || true
+          exit 1
+        fi
+        # Pending changes are normal on main. Batching a dry run validates them
+        # without consuming them; stable publication requires them to be batched.
+        "$CHANGIE" batch patch --dry-run > /dev/null

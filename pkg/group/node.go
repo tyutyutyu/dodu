@@ -97,7 +97,13 @@ func sumChildren(n *Node) {
 	estimated := false
 	for _, c := range n.Children {
 		sumChildren(c)
-		total += c.Size.Total
+		// Image totals include layers shared by other image leaves. Aggregate
+		// their exclusive contribution; daemon-wide shared layers are added once.
+		if c.Kind == KindImage {
+			total += c.Size.Exclusive
+		} else {
+			total += c.Size.Total
+		}
 		shared += c.Size.Shared
 		exclusive += c.Size.Exclusive
 		if c.Size.Estimated {

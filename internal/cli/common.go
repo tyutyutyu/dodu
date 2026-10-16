@@ -11,6 +11,7 @@ import (
 
 	"github.com/tyutyutyu/dodu/pkg/cache"
 	"github.com/tyutyutyu/dodu/pkg/docker"
+	"github.com/tyutyutyu/dodu/pkg/plan"
 	"github.com/tyutyutyu/dodu/pkg/scan"
 )
 
@@ -54,19 +55,8 @@ func newClient(f *rootFlags) (docker.Client, error) {
 // the entry is fresh per the default policy.
 func loadOrScan(ctx context.Context, client docker.Client, f *rootFlags) (*scan.Snapshot, error) {
 	if !f.noCache {
-		path, err := cache.DefaultPath()
-		if err == nil {
-			if c, err := cache.OpenBolt(path); err == nil {
-				defer func() { _ = c.Close() }()
-				info, perr := client.Ping(ctx)
-				if perr == nil {
-					if snap, err := c.Load(cache.Key(info)); err == nil {
-						if cache.DefaultPolicy.Fresh(snap, time.Now()) {
-							return snap, nil
-						}
-					}
-				}
-			}
+		if snap := cachedSnapshot(ctx, client); snap != nil {
+			return snap, nil
 		}
 	}
 
@@ -86,6 +76,28 @@ func loadOrScan(ctx context.Context, client docker.Client, f *rootFlags) (*scan.
 	return snap, nil
 }
 
+// cachedSnapshot releases the database before a cache miss starts a scan.
+func cachedSnapshot(ctx context.Context, client docker.Client) *scan.Snapshot {
+	path, err := cache.DefaultPath()
+	if err != nil {
+		return nil
+	}
+	c, err := cache.OpenBolt(path)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = c.Close() }()
+	info, err := client.Ping(ctx)
+	if err != nil {
+		return nil
+	}
+	snap, err := c.Load(cache.Key(info))
+	if err != nil || !cache.DefaultPolicy.Fresh(snap, time.Now()) {
+		return nil
+	}
+	return snap
+}
+
 // classifyExit maps an error to a process exit code.
 func classifyExit(err error) int {
 	switch {
@@ -93,7 +105,7 @@ func classifyExit(err error) int {
 		return ExitOK
 	case errors.Is(err, docker.ErrDaemonUnreachable):
 		return ExitDaemonUnreach
-	case errors.Is(err, docker.ErrReadOnly):
+	case errors.Is(err, docker.ErrReadOnly), errors.Is(err, plan.ErrReadOnly):
 		return ExitReadOnlyDenied
 	default:
 		return ExitGeneral

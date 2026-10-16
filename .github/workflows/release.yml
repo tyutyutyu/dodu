@@ -1,33 +1,144 @@
-name: release
+name: Release
 
 on:
   push:
-    tags:
-      - "v*"
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing vMAJOR.MINOR.PATCH tag, or nightly for the selected ref'
+        required: true
+        default: nightly
+        type: string
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
+      source_ref:
+        description: 'Immutable source commit for a nightly build'
+        required: false
+        type: string
 
 permissions:
-  contents: write
+  contents: read
+
+# Serialize each tag; nightlies cannot cancel a queued stable version.
+concurrency:
+  group: dodu-release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
 
 jobs:
-  goreleaser:
+  changes:
+    name: Check for unpublished changes
     runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      publish: ${{ steps.decision.outputs.publish }}
+      commit: ${{ steps.decision.outputs.commit }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4.4.0
+      - name: Checkout candidate source and nightly tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.tag == 'nightly' && (inputs.source_ref || github.sha) || inputs.tag || github.ref }}
+          fetch-depth: 0
+      - name: Compare with the last published nightly
+        id: decision
+        env:
+          GH_REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          # Historical stable tags may predate the nightly comparison helper.
+          if [[ "$RELEASE_TAG" != nightly ]]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+            echo "commit=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          else
+            python3 scripts/release.py should-publish "$RELEASE_TAG"
+          fi
+
+  release:
+    needs: changes
+    if: needs.changes.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    env:
+      GH_REPO: ${{ github.repository }}
+      GH_TOKEN: ${{ github.token }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout release source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.changes.outputs.commit }}
           fetch-depth: 0
 
       - name: Set up Go
-        uses: actions/setup-go@v5.6.0
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          go-version: "1.23.12"
+          go-version: '1.23.12'
           cache: true
 
-      - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6.4.0
+      - name: Install Task
+        uses: arduino/setup-task@v2.0.0
         with:
-          distribution: goreleaser
-          version: "v2.18.3"
-          args: release --clean
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify source and changelog
+        run: |
+          task verify
+          task release:check
+          python3 -m unittest discover -s scripts/tests -v
+          # Task's tracked local checksum is not a source change.
+          git restore .task/checksum/build
+          git diff --exit-code
+
+      - name: Validate tag and prepare release notes
+        id: metadata
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: python3 scripts/release.py prepare "$RELEASE_TAG"
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@f06c13b6b1a9625abc9e6e439d9c05a8f2190e94 # v7.2.3
+        with:
+          version: v2.18.1
+          install-only: true
+
+      - name: Package release
+        run: |
+          args=(release --clean --skip=publish --release-notes=release-notes.md)
+          if [[ "$DODU_RELEASE_CHANNEL" == nightly ]]; then args+=(--snapshot); fi
+          goreleaser "${args[@]}"
+          python3 scripts/release.py verify-assets
+
+      - name: Test packaged Linux binary
+        env:
+          ARCHIVE_VERSION: ${{ steps.metadata.outputs.archive_version }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/dodu-package"
+          tar -xzf "dist/dodu_${ARCHIVE_VERSION}_linux_amd64.tar.gz" -C "$RUNNER_TEMP/dodu-package"
+          version_output=$("$RUNNER_TEMP/dodu-package/dodu" version)
+          echo "$version_output"
+          [[ "$version_output" == "dodu $DODU_BUILD_VERSION (commit $(git rev-parse HEAD),"* ]]
+          docker run --rm --network none -v "$RUNNER_TEMP/dodu-package/dodu:/dodu:ro" alpine:3.22 /dodu version
+          docker run --rm --network none -v "$RUNNER_TEMP/dodu-package/dodu:/dodu:ro" vbatts/slackware:15.0 /dodu version
+          DODU_BINARY="$RUNNER_TEMP/dodu-package/dodu" sh test/integration/smoke.sh
+
+      - name: Keep build artifacts for debugging
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-${{ steps.metadata.outputs.tag }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/*.tar.gz
+            dist/checksums.txt
+            dist/build-info.json
+            release-notes.md
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Publish release and assets
+        run: bash scripts/publish-release.sh

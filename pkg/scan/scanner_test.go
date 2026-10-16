@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -50,6 +51,9 @@ func TestScanHappyPath(t *testing.T) {
 
 func TestScanPartialFailure(t *testing.T) {
 	m := mock.New()
+	m.DiskUsageFunc = func(context.Context) (docker.DiskUsage, error) {
+		return docker.DiskUsage{}, errors.New("disk usage failed")
+	}
 	m.Daemon = docker.DaemonInfo{ID: "d-1"}
 	m.Images = []docker.Image{{ID: "img1"}}
 	m.ListVolumesFunc = func(_ context.Context) ([]docker.Volume, error) {
@@ -85,17 +89,16 @@ func TestScanPingFailureAborts(t *testing.T) {
 
 func TestScanContextCancel(t *testing.T) {
 	m := mock.New()
-	m.ListImagesFunc = func(ctx context.Context) ([]docker.Image, error) {
+	m.DiskUsageFunc = func(ctx context.Context) (docker.DiskUsage, error) {
 		<-ctx.Done()
-		return nil, ctx.Err()
+		return docker.DiskUsage{}, ctx.Err()
 	}
 	s := scan.New(m, newSilentLogger())
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 	snap, err := s.Scan(ctx)
-	if err != nil && snap == nil {
-		// either path is acceptable; we just must not hang
-		return
+	if !errors.Is(err, context.DeadlineExceeded) || snap != nil {
+		t.Fatalf("cancelled scan = %v, %v; want nil, deadline exceeded", snap, err)
 	}
 }
 
@@ -117,5 +120,51 @@ func BenchmarkScan(b *testing.B) {
 		if _, err := s.Scan(context.Background()); err != nil {
 			b.Fatal(err)
 		}
+	}
+}
+
+func TestScanCancellationWaitsForLogWorkers(t *testing.T) {
+	m := mock.New()
+	m.Containers = []docker.Container{{ID: "one"}, {ID: "two"}, {ID: "three"}}
+	var active atomic.Int32
+	started := make(chan struct{})
+	m.LogFileSizeFunc = func(ctx context.Context, id string) (int64, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		if id == "one" {
+			close(started)
+		}
+		<-ctx.Done()
+		time.Sleep(10 * time.Millisecond)
+		return 0, ctx.Err()
+	}
+	s := scan.New(m, newSilentLogger())
+	s.LogConcurrency = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { <-started; cancel() }()
+	snap, err := s.Scan(ctx)
+	if !errors.Is(err, context.Canceled) || snap != nil {
+		t.Fatalf("scan = %v, %v", snap, err)
+	}
+	if got := active.Load(); got != 0 {
+		t.Fatalf("scan returned with %d active log workers", got)
+	}
+}
+
+func TestScanUsesSingleDaemonUsageSnapshot(t *testing.T) {
+	m := mock.New()
+	m.DiskUsageFunc = func(context.Context) (docker.DiskUsage, error) {
+		return docker.DiskUsage{LayersSize: 400, Images: []docker.Image{{ID: "image", Size: 400, SharedSize: 300}}, Containers: []docker.Container{{ID: "container"}}, Volumes: []docker.Volume{{Name: "volume", UsageBytes: 700}}}, nil
+	}
+	snap, err := scan.New(m, newSilentLogger()).Scan(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !snap.LayersSizeKnown || snap.LayersSize != 400 || len(snap.Images) != 1 || len(snap.Containers) != 1 || len(snap.Volumes) != 1 {
+		t.Fatalf("snapshot = %+v", snap)
+	}
+	if m.CallCount["DiskUsage"] != 1 || m.CallCount["ListImages"] != 0 || m.CallCount["ListVolumes"] != 0 || m.CallCount["BuildCacheUsage"] != 0 {
+		t.Fatalf("calls = %v", m.CallCount)
 	}
 }
