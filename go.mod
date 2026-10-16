@@ -1,6 +1,6 @@
 module github.com/tyutyutyu/dodu
 
-go 1.25.0
+go 1.26.0
 
 require (
 	github.com/charmbracelet/bubbletea v1.3.10
@@ -8,7 +8,7 @@ require (
 	github.com/docker/docker v27.5.1+incompatible
 	github.com/spf13/cobra v1.10.2
 	go.etcd.io/bbolt v1.5.0
-	golang.org/x/sync v0.20.0
+	golang.org/x/sync v0.24.0
 	golang.org/x/term v0.30.0
 )
 
