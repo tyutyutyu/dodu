@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/tyutyutyu/dodu/pkg/docker"
 	"github.com/tyutyutyu/dodu/pkg/group"
@@ -25,10 +25,23 @@ func fixtureModel() *Model {
 	return m
 }
 
+// key types s one rune at a time and returns the first command dispatched.
 func key(m *Model, s string) tea.Cmd {
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)})
-	return cmd
+	var first tea.Cmd
+	for _, r := range s {
+		_, cmd := m.Update(tea.KeyPressMsg{Code: r, Text: string(r)})
+		if first == nil {
+			first = cmd
+		}
+	}
+	return first
 }
+
+var (
+	enterKey = tea.KeyPressMsg{Code: tea.KeyEnter}
+	escKey   = tea.KeyPressMsg{Code: tea.KeyEscape}
+	ctrlCKey = tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl}
+)
 
 func TestGroupingAndSortPreserveObjectSelection(t *testing.T) {
 	m := fixtureModel()
@@ -57,7 +70,7 @@ func TestBuildCacheMarksSurviveLayoutChanges(t *testing.T) {
 	if len(m.preview.Items) != 1 || m.preview.Items[0].ID != "cache-1" {
 		t.Fatalf("cache mark lost in project layout: %+v", m.preview)
 	}
-	_, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	_, _ = m.Update(escKey)
 	key(m, "d")
 	if len(m.marks) != 0 {
 		t.Fatal("cannot unmark cache in project layout")
@@ -84,14 +97,29 @@ func TestPlanBlocksReferencedImageAndRequiresExactConfirmation(t *testing.T) {
 	m.preview = &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "safe"}}}
 	m.confirming = true
 	key(m, "ye")
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(enterKey)
 	if cmd != nil || m.executing {
 		t.Fatal("incomplete confirmation executed")
 	}
 	key(m, "s")
-	_, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd = m.Update(enterKey)
 	if cmd == nil || !m.executing {
 		t.Fatal("exact yes should schedule guarded execution")
+	}
+}
+
+func TestSpaceTogglesMarkButIsNotConfirmationText(t *testing.T) {
+	m := fixtureModel()
+	m.restoreSelection(&group.Node{Kind: group.KindImage, Meta: map[string]string{"id": "image-1"}})
+	key(m, " ")
+	if len(m.marks) != 1 {
+		t.Fatal("space did not toggle the mark")
+	}
+	m.preview = &plan.Plan{Items: []plan.Item{{Kind: group.KindImage, ID: "safe"}}}
+	m.confirming = true
+	key(m, " yes")
+	if m.confirmation != "yes" {
+		t.Fatalf("confirmation = %q, want %q", m.confirmation, "yes")
 	}
 }
 
@@ -112,7 +140,7 @@ func TestRenderingFitsTerminalAndDetailsAreSnapshotOnly(t *testing.T) {
 	}
 	for _, width := range []int{40, 80, 120} {
 		m.width = width
-		view := m.View()
+		view := m.View().Content
 		if lipgloss.Width(view) > width || lipgloss.Height(view) > 24 {
 			t.Fatalf("overflow %dx%d: %dx%d", width, 24, lipgloss.Width(view), lipgloss.Height(view))
 		}
@@ -144,7 +172,7 @@ func TestHelpCannotPrepareHiddenCleanup(t *testing.T) {
 			t.Fatalf("help dispatched command %s", k)
 		}
 	}
-	m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m.Update(enterKey)
 	if len(m.marks) > 0 || m.preview != nil || m.preparing || m.executing {
 		t.Fatal("help allowed invisible planner actions")
 	}
@@ -166,7 +194,7 @@ func TestHiddenPlannerCannotAcceptCleanupKeys(t *testing.T) {
 						t.Fatalf("hidden planner dispatched %s", k)
 					}
 				}
-				_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+				_, cmd := m.Update(enterKey)
 				if cmd != nil || m.preparing || m.executing || m.confirmation != "" || len(m.marks) != 0 {
 					t.Fatal("hidden planner accepted cleanup input")
 				}
@@ -200,11 +228,11 @@ func TestFailedScanRequiresSuccessfulRetryBeforeCleanup(t *testing.T) {
 	}
 	defer m.operationCancel()
 	m.Update(prepareDoneMsg{snap: m.snap})
-	if !strings.Contains(m.View(), "Type yes") {
+	if !strings.Contains(m.View().Content, "Type yes") {
 		t.Fatal("cleanup confirmation is hidden after recovery")
 	}
 	key(m, "yes")
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	_, cmd := m.Update(enterKey)
 	if cmd == nil || !m.executing {
 		t.Fatal("visible confirmation cannot execute cleanup")
 	}
@@ -218,7 +246,7 @@ func TestInterruptWaitsForOperationBeforeQuit(t *testing.T) {
 		m.operationCancel = cancel
 		m.executing = executing
 		m.preparing = !executing
-		_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+		_, cmd := m.Update(ctrlCKey)
 		if cmd != nil || ctx.Err() != context.Canceled || !m.quitAfterOperation {
 			t.Fatal("interrupt did not cancel and wait")
 		}
@@ -239,7 +267,7 @@ func TestInterruptWaitsForOperationBeforeQuit(t *testing.T) {
 func TestInterruptExitsConfirmation(t *testing.T) {
 	m := fixtureModel()
 	m.confirming = true
-	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, cmd := m.Update(ctrlCKey)
 	if cmd == nil {
 		t.Fatal("confirmation swallowed interrupt")
 	}
