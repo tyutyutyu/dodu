@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/build"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/image"
@@ -373,7 +374,7 @@ func (c *sdkClient) PruneBuildCache(ctx context.Context, f PruneFilters) (PruneR
 		// Anchor and escape it so selection never widens to substring/regex matches.
 		args.Add("id", "^("+strings.Join(ids, "|")+")$")
 	}
-	rep, err := c.cli.BuildCachePrune(ctx, types.BuildCachePruneOptions{
+	rep, err := c.cli.BuildCachePrune(ctx, build.CachePruneOptions{
 		Filters: args,
 		// Explicit selection includes internal/frontend/shared records; the exact
 		// ID filter still bounds deletion. Preserve default retention without IDs.
