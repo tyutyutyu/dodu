@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 	"github.com/spf13/cobra"
 
 	"github.com/tyutyutyu/dodu/internal/tui"
@@ -24,7 +24,7 @@ var runTUI = func(cmd *cobra.Command, f *rootFlags) error {
 	model.SetReadOnly(abortIfReadOnly(f) != nil)
 	model.SetContext(cmd.Context())
 	model.SetInitialScan(func(ctx context.Context) (*scan.Snapshot, error) { return loadOrScan(ctx, client, f) })
-	prog := tea.NewProgram(model, tea.WithContext(cmd.Context()), tea.WithAltScreen())
+	prog := tea.NewProgram(model, tea.WithContext(cmd.Context()))
 	_, err = prog.Run()
 	return err
 }

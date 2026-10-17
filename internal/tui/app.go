@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
 
 	"github.com/tyutyutyu/dodu/pkg/docker"
 	"github.com/tyutyutyu/dodu/pkg/group"
@@ -174,13 +174,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = "exported " + msg.path
 		}
 		return m, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
 	return m, nil
 }
 
-func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		if m.executing || m.preparing {
 			m.quitAfterOperation = true
@@ -235,8 +235,8 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				m.confirmation = m.confirmation[:len(m.confirmation)-1]
 			}
 		default:
-			if msg.Type == tea.KeyRunes && len(m.confirmation)+len(string(msg.Runes)) <= 3 {
-				m.confirmation += string(msg.Runes)
+			if msg.Text != "" && msg.Text != " " && len(m.confirmation)+len(msg.Text) <= 3 {
+				m.confirmation += msg.Text
 			}
 		}
 		return m, nil
@@ -275,7 +275,7 @@ func (m *Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.startScan()
 	case "tab":
 		m.hideDetails = !m.hideDetails
-	case "d", " ":
+	case "d", "space":
 		m.toggleMark()
 	case "p":
 		m.openPlan()
@@ -380,8 +380,14 @@ func (m *Model) rebuildTree() {
 	m.restoreSelection(selected)
 }
 
-// View renders the current state.
-func (m *Model) View() string {
+// View renders the current state in the alternate screen.
+func (m *Model) View() tea.View {
+	v := tea.NewView(m.content())
+	v.AltScreen = true
+	return v
+}
+
+func (m *Model) content() string {
 	if m.loading {
 		return loadingView(m.loadStarted)
 	}
