@@ -36,9 +36,17 @@ tmp/
 __pycache__/
 
 # >>> github-manager: gitignore-baseline
-.DS_Store
-.idea/
+# dotenv environment variable files
 .env
-.claude/
-!.claude/skills/
+.env.*
+!.env.example
+
+# Claude Code - local configuration
+.claude/settings.local.json
+CLAUDE.local.md
+
+# ECC - temporary files
+.observer-tmp/
+.claude/worktrees/
+.claude/scheduled_tasks.lock
 # <<< github-manager: gitignore-baseline
