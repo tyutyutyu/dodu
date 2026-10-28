@@ -3,7 +3,7 @@ module github.com/tyutyutyu/dodu
 go 1.26.0
 
 require (
-	charm.land/bubbletea/v2 v2.1.0
+	charm.land/bubbletea/v2 v2.1.1
 	charm.land/lipgloss/v2 v2.0.6
 	github.com/docker/docker v28.5.2+incompatible
 	github.com/spf13/cobra v1.10.2
