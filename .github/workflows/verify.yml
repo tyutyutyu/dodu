@@ -1,4 +1,4 @@
-name: CI
+name: verify
 
 on:
   workflow_dispatch:
@@ -11,8 +11,8 @@ permissions:
   contents: read
 
 jobs:
-  verify:
-    name: verify (${{ matrix.os }})
+  test:
+    name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -74,3 +74,20 @@ jobs:
             dist/build-info.json
           if-no-files-found: error
           retention-days: 7
+
+  # The single required PR check; the matrix legs report as `test (<os>)`.
+  verify:
+    name: verify
+    needs: [test, package]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require every job to succeed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "Job results: $RESULTS"
+          for result in $RESULTS; do
+            [ "$result" = success ] || exit 1
+          done

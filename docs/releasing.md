@@ -72,7 +72,7 @@ a brief publication window. An upload failure leaves a draft and must be retried
 
 Every workflow has **Run workflow** in GitHub Actions:
 
-- **CI**: verify a selected branch/ref and produce downloadable preview artifacts.
+- **verify**: verify a selected branch/ref and produce downloadable preview artifacts.
 - **Release**: provide an existing `vMAJOR.MINOR.PATCH` tag, or `nightly` to build
   the selected ref. Stable runs always check out the tag, regardless of selected ref.
 - **Nightly**: build the selected ref through Release; scheduled runs use main.
@@ -80,7 +80,7 @@ Every workflow has **Run workflow** in GitHub Actions:
 Equivalent CLI commands:
 
 ```sh
-gh workflow run ci.yml --ref main
+gh workflow run verify.yml --ref main
 gh workflow run release.yml --ref main -f tag=v0.4.0
 gh workflow run nightly.yml --ref main
 ```
