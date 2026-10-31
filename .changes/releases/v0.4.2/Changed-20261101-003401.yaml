@@ -1,0 +1,3 @@
+kind: Changed
+body: Upgrade the terminal UI to Bubble Tea v2 and Lip Gloss v2, and the Docker client to the v28 SDK. Keyboard controls, marking, and cleanup behave as before.
+time: 2026-11-01T00:34:01.536639927+01:00

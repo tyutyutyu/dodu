@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 New changes are collected in [`.changes/unreleased`](.changes/unreleased) until the next release.
 
+## [0.4.2](https://github.com/tyutyutyu/dodu/releases/tag/v0.4.2) - 2026-11-01
+
+### Changed
+
+- Upgrade the terminal UI to Bubble Tea v2 and Lip Gloss v2, and the Docker client to the v28 SDK. Keyboard controls, marking, and cleanup behave as before.
+
+**Full changelog:** [v0.4.1...v0.4.2](https://github.com/tyutyutyu/dodu/compare/v0.4.1...v0.4.2)
+
 ## [0.4.1](https://github.com/tyutyutyu/dodu/releases/tag/v0.4.1) - 2026-10-16
 
 ### Fixed
