@@ -1,0 +1,3 @@
+# >>> github-manager: gitattributes-baseline
+.backlog/** whitespace=-blank-at-eof
+# <<< github-manager: gitattributes-baseline
